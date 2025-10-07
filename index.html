@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>塔防遊戲</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 Firebase SDK (保持不變) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // 設定 Firebase Debug 日誌
+        // setLogLevel('Debug');
+
+        // 檢查全局變數
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let app, db, auth;
+        let userId = null;
+        let gameDataRef = null;
+        
+        // 全局遊戲狀態變數 (供JS主邏輯存取)
+        window.firebaseInitialized = false;
+        window.highScore = 0;
+
+        // 嘗試初始化 Firebase 並登入
+        async function setupFirebase() {
+            try {
+                if (!firebaseConfig) {
+                    console.error("Firebase config is missing.");
+                    return;
+                }
+                
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                
+                await new Promise(resolve => {
+                    onAuthStateChanged(auth, async (user) => {
+                        if (user) {
+                            userId = user.uid;
+                        } else {
+                            if (initialAuthToken) {
+                                await signInWithCustomToken(auth, initialAuthToken);
+                            } else {
+                                await signInAnonymously(auth);
+                            }
+                            // Re-run onAuthStateChanged listener to catch the signed-in user
+                            return; 
+                        }
+
+                        if (userId) {
+                            console.log("Firebase Auth successful. User ID:", userId);
+                            // 私人資料路徑: /artifacts/{appId}/users/{userId}/towerDefense/gameData
+                            gameDataRef = doc(db, 'artifacts', appId, 'users', userId, 'towerDefense', 'gameData');
+                            await loadHighScore();
+                            window.firebaseInitialized = true;
+                        }
+                        resolve();
+                    });
+                });
+
+            } catch (error) {
+                console.error("Firebase setup failed:", error);
+            }
+        }
+        
+        // 從 Firestore 載入最高波次
+        window.loadHighScore = async function() {
+            if (!gameDataRef) return;
+            try {
+                const docSnap = await getDoc(gameDataRef);
+                if (docSnap.exists()) {
+                    window.highScore = docSnap.data().highScore || 0;
+                    console.log("High Score loaded:", window.highScore);
+                } else {
+                    console.log("No high score found. Starting new game.");
+                }
+                // 更新 UI
+                const highScoreElement = document.getElementById('high-score');
+                if (highScoreElement) {
+                    highScoreElement.textContent = window.highScore;
+                }
+
+            } catch (error) {
+                console.error("Error loading high score:", error);
+            }
+        }
+        
+        // 將最高波次儲存到 Firestore
+        window.saveHighScore = async function(newHighScore) {
+            if (!gameDataRef || newHighScore <= window.highScore) return;
+            window.highScore = newHighScore;
+            try {
+                await setDoc(gameDataRef, { highScore: newHighScore, lastUpdated: new Date() }, { merge: true });
+                console.log("High Score saved:", newHighScore);
+                // 更新 UI
+                const highScoreElement = document.getElementById('high-score');
+                if (highScoreElement) {
+                    highScoreElement.textContent = newHighScore;
+                }
+            } catch (error) {
+                console.error("Error saving high score:", error);
+            }
+        }
+
+        setupFirebase();
+    </script>
+    <style>
+        /* 自訂遊戲樣式，使其更具視覺吸引力 */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a1a2e; /* 深藍紫色背景 */
+            color: #ffffff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .game-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            max-width: 840px;
+            width: 100%;
+            background: #2a0a4e; /* 較淺的深藍紫色 */
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            padding: 20px;
+        }
+
+        canvas {
+            display: block;
+            border: 4px solid #9c4dcc; /* 霓虹紫色邊框 */
+            border-radius: 8px;
+            background-color: #0d001e;
+            touch-action: none; /* 避免觸摸事件導致滾動 */
+        }
+        
+        .ui-panel {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            padding: 10px 0;
+            gap: 10px;
+        }
+
+        .status-bar {
+            display: flex;
+            gap: 20px;
+            font-size: 1.1rem;
+            font-weight: bold;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            color: #e5b8ff; /* 淺紫色 */
+        }
+        
+        .control-panel {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .control-button {
+            padding: 8px 15px;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px #4a148c;
+            transform: translateY(0);
+        }
+
+        .control-button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 5px #4a148c;
+        }
+
+        .control-button:active {
+            transform: translateY(3px);
+            box-shadow: 0 1px #4a148c;
+        }
+
+        .buy-basic-button {
+            background-color: #8e24aa; /* 紫色 */
+            color: white;
+            border: none;
+        }
+
+        .buy-slow-button {
+            background-color: #ffc107; /* 琥珀色/黃色 */
+            color: #333;
+            border: none;
+            box-shadow: 0 4px #a08233;
+        }
+
+        .start-wave-button {
+            background-color: #00897b; /* 綠松石色 */
+            color: white;
+            border: none;
+        }
+        
+        .selected-buy {
+            border: 3px solid #00ff00; /* 綠色邊框表示選中 */
+            box-shadow: 0 0 10px rgba(0, 255, 0, 0.5);
+        }
+
+        .game-message {
+            text-align: center;
+            font-size: 1.5rem;
+            color: #ffcc80; /* 琥珀色 */
+            margin-top: 10px;
+        }
+        
+        /* 手機響應式調整 */
+        @media (max-width: 768px) {
+            .game-container {
+                padding: 10px;
+            }
+            .ui-panel {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .status-bar {
+                justify-content: space-around;
+                font-size: 1rem;
+                margin-bottom: 10px;
+            }
+            .control-panel {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<div class="game-container">
+    <h1 class="text-3xl font-bold text-center mb-4 text-pink-400">霓虹塔防</h1>
+    
+    <!-- 遊戲狀態顯示面板 -->
+    <div class="ui-panel">
+        <div class="status-bar">
+            <div class="status-item">
+                <!-- 錢幣圖示 (SVG) -->
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-yellow-400"><circle cx="12" cy="12" r="10"></circle><path d="M16 8h-4a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4h-4"></path><path d="M12 18V6"></path></svg>
+                金幣: <span id="gold">200</span>
+            </div>
+            <div class="status-item">
+                <!-- 生命圖示 (SVG) -->
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-red-500"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"></path></svg>
+                生命: <span id="lives">20</span>
+            </div>
+            <div class="status-item">
+                波次: <span id="wave">0</span>
+            </div>
+            <div class="status-item">
+                最高紀錄: <span id="high-score">0</span>
+            </div>
+        </div>
+
+        <div class="control-panel">
+            <button id="buy-basic-btn" class="control-button buy-basic-button">購買攻擊塔 ($100)</button>
+            <button id="buy-slow-btn" class="control-button buy-slow-button">購買減速塔 ($150)</button>
+            <button id="start-wave-btn" class="control-button start-wave-button">開始波次</button>
+        </div>
+    </div>
+
+    <!-- 遊戲畫布 -->
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    
+    <div id="game-message" class="game-message">點擊「開始波次」來啟動！</div>
+</div>
+
+<script type="module">
+    // --- 遊戲設定與環境變數 ---
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    const GRID_SIZE = 40; // 每個格子的邊長
+    const COLS = canvas.width / GRID_SIZE; // 20
+    const ROWS = canvas.height / GRID_SIZE; // 15
+    
+    // UI 元素
+    const goldDisplay = document.getElementById('gold');
+    const livesDisplay = document.getElementById('lives');
+    const waveDisplay = document.getElementById('wave');
+    const highScoreDisplay = document.getElementById('high-score');
+    const gameMessage = document.getElementById('game-message');
+    const startWaveBtn = document.getElementById('start-wave-btn');
+    const buyBasicBtn = document.getElementById('buy-basic-btn');
+    const buySlowBtn = document.getElementById('buy-slow-btn');
+
+    // 塔類型定義
+    const TOWER_TYPES = {
+        BASIC: 'Basic',
+        SLOW: 'Slow'
+    };
+    
+    const TOWER_COSTS = {
+        [TOWER_TYPES.BASIC]: 100,
+        [TOWER_TYPES.SLOW]: 150
+    };
+
+    // 遊戲狀態
+    let gameState = {
+        gold: 200,
+        lives: 20,
+        wave: 0,
+        isWaveActive: false,
+        placingTower: false,
+        currentTowerTypeToPlace: null, // 新增：當前要放置的塔類型
+        gameOver: false,
+        enemiesSpawnedInWave: 0,
+        enemiesRemainingInWave: 0,
+        totalEnemiesInWave: 0,
+    };
+    
+    // 遊戲物件陣列
+    let enemies = [];
+    let towers = [];
+    let projectiles = [];
+
+    // --- 遊戲路徑定義 ---
+    const path = [
+        { x: 0.5, y: 3.5 }, // 起點
+        { x: 5.5, y: 3.5 },
+        { x: 5.5, y: 10.5 },
+        { x: 14.5, y: 10.5 },
+        { x: 14.5, y: 3.5 },
+        { x: 19.5, y: 3.5 }  // 終點
+    ];
+
+    // 將格子座標轉換為像素座標
+    function getPixelCoords(gridX, gridY) {
+        return {
+            x: gridX * GRID_SIZE,
+            y: gridY * GRID_SIZE
+        };
+    }
+
+    // 檢查點是否在路徑上或緊鄰路徑
+    function isPathTile(gridX, gridY) {
+        for (let i = 0; i < path.length - 1; i++) {
+            const start = path[i];
+            const end = path[i + 1];
+
+            if (start.y === end.y) { // 水平段
+                const y = Math.floor(start.y);
+                const xStart = Math.min(Math.floor(start.x), Math.floor(end.x));
+                const xEnd = Math.max(Math.floor(start.x), Math.floor(end.x));
+                if (gridY === y && gridX >= xStart && gridX <= xEnd) return true;
+            } else if (start.x === end.x) { // 垂直段
+                const x = Math.floor(start.x);
+                const yStart = Math.min(Math.floor(start.y), Math.floor(end.y));
+                const yEnd = Math.max(Math.floor(start.y), Math.floor(end.y));
+                if (gridX === x && gridY >= yStart && gridY <= yEnd) return true;
+            }
+        }
+        return false;
+    }
+
+    // --- 遊戲物件類別 ---
+
+    class Enemy {
+        constructor(wave) {
+            this.pathIndex = 0;
+            const startCoords = getPixelCoords(path[0].x, path[0].y);
+            this.x = startCoords.x;
+            this.y = startCoords.y;
+            this.radius = 12;
+            this.baseSpeed = 0.5 + wave * 0.05;
+            this.slowMultiplier = 1; // 新增：緩速乘數 (1 = 正常速度)
+            this.health = 50 + wave * 15;
+            this.maxHealth = this.health;
+            this.reward = 10 + Math.floor(wave / 2) * 5;
+            this.color = `hsl(${wave * 30 % 360}, 70%, 50%)`; // 根據波次變換顏色
+            this.isSlowed = false; // 追蹤是否被緩速，用於繪圖
+        }
+
+        draw() {
+            ctx.fillStyle = this.color;
+            // 如果被緩速，繪製藍色光暈
+            if (this.isSlowed) {
+                ctx.shadowColor = '#00BFFF';
+                ctx.shadowBlur = 10;
+            } else {
+                ctx.shadowBlur = 0;
+            }
+
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0; // 重置陰影
+
+            // 繪製血條
+            const healthBarWidth = this.radius * 2;
+            const healthPercentage = this.health / this.maxHealth;
+            
+            // 背景（紅色）
+            ctx.fillStyle = '#660000';
+            ctx.fillRect(this.x - this.radius, this.y - this.radius - 8, healthBarWidth, 5);
+            
+            // 血量（綠色）
+            ctx.fillStyle = '#00ff00';
+            ctx.fillRect(this.x - this.radius, this.y - this.radius - 8, healthBarWidth * healthPercentage, 5);
+        }
+
+        update() {
+            if (this.pathIndex >= path.length - 1) {
+                gameState.lives--;
+                gameState.enemiesRemainingInWave--;
+                this.isDead = true;
+                return;
+            }
+
+            // 計算當前速度 (受緩速影響)
+            const speed = this.baseSpeed * this.slowMultiplier;
+            this.isSlowed = this.slowMultiplier < 1; // 判斷是否被緩速
+
+            const target = getPixelCoords(path[this.pathIndex + 1].x, path[this.pathIndex + 1].y);
+            const dx = target.x - this.x;
+            const dy = target.y - this.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            if (distance < speed) {
+                this.pathIndex++;
+            } else {
+                this.x += (dx / distance) * speed;
+                this.y += (dy / distance) * speed;
+            }
+            
+            // 重置緩速乘數，由 SlowTower 在每幀重新施加
+            this.slowMultiplier = 1; 
+        }
+    }
+
+    // 基礎塔類別
+    class BaseTower {
+        constructor(gridX, gridY, color, range) {
+            this.gridX = gridX;
+            this.gridY = gridY;
+            const pixelCoords = getPixelCoords(gridX + 0.5, gridY + 0.5);
+            this.x = pixelCoords.x;
+            this.y = pixelCoords.y;
+            this.range = range || GRID_SIZE * 3.5;
+            this.color = color;
+        }
+
+        drawRange(alpha = 0.3) {
+            ctx.strokeStyle = `rgba(255, 128, 237, ${alpha})`;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.range, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+
+        draw() {
+            // 繪製塔基座 (圓形)
+            ctx.fillStyle = '#3a006f';
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, 18, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 繪製塔身
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.fillRect(this.x - 8, this.y - 15, 16, 30);
+            ctx.fill();
+        }
+
+        // 佔位方法，由子類實作
+        update() {} 
+    }
+
+    // 攻擊塔 (原 Tower)
+    class BasicTower extends BaseTower {
+        constructor(gridX, gridY) {
+            super(gridX, gridY, '#ff80ed', GRID_SIZE * 3.5);
+            this.attackSpeed = 60; // 60 幀攻擊一次 (1 秒)
+            this.cooldown = 0;
+            this.projectileDamage = 20;
+            this.target = null;
+            this.type = TOWER_TYPES.BASIC;
+        }
+
+        draw() {
+            super.draw();
+            // 繪製範圍 (僅在放置時)
+            if (gameState.placingTower && gameState.currentTowerTypeToPlace === this.type) {
+                this.drawRange();
+            }
+        }
+
+        update() {
+            if (this.cooldown > 0) {
+                this.cooldown--;
+                return;
+            }
+
+            // 尋找目標
+            this.target = null;
+            let closestDistanceSq = this.range * this.range;
+
+            for (const enemy of enemies) {
+                const dx = enemy.x - this.x;
+                const dy = enemy.y - this.y;
+                const distanceSq = dx * dx + dy * dy;
+
+                if (distanceSq <= closestDistanceSq) {
+                    closestDistanceSq = distanceSq;
+                    this.target = enemy;
+                }
+            }
+
+            // 攻擊
+            if (this.target) {
+                this.fire();
+            }
+        }
+
+        fire() {
+            if (!this.target) return;
+            this.cooldown = this.attackSpeed;
+            
+            projectiles.push(new Projectile(
+                this.x, 
+                this.y, 
+                this.target, 
+                this.projectileDamage
+            ));
+        }
+    }
+
+    // 減速塔
+    class SlowTower extends BaseTower {
+        constructor(gridX, gridY) {
+            super(gridX, gridY, '#FFC107', GRID_SIZE * 2.5); // 較小的範圍
+            this.slowFactor = 0.5; // 減速 50%
+            this.type = TOWER_TYPES.SLOW;
+        }
+
+        draw() {
+            super.draw();
+            // 繪製減速塔的圓形光環 (即使在放置時)
+            this.drawRange(0.2); // 始終繪製範圍，但更透明
+            
+            if (gameState.placingTower && gameState.currentTowerTypeToPlace === this.type) {
+                this.drawRange(0.5);
+            }
+        }
+
+        update() {
+            // 找出範圍內所有敵人並施加緩速效果
+            for (const enemy of enemies) {
+                const dx = enemy.x - this.x;
+                const dy = enemy.y - this.y;
+                const distanceSq = dx * dx + dy * dy;
+
+                if (distanceSq <= this.range * this.range) {
+                    // 應用緩速乘數 (取最小值確保不會覆蓋更強的緩速效果，雖然目前只有一種)
+                    enemy.slowMultiplier = Math.min(enemy.slowMultiplier, this.slowFactor);
+                }
+            }
+        }
+    }
+
+
+    class Projectile {
+        constructor(x, y, target, damage) {
+            this.x = x;
+            this.y = y;
+            this.target = target;
+            this.damage = damage;
+            this.speed = 7;
+            this.radius = 4;
+            this.color = '#00ffff'; // 青色
+        }
+
+        draw() {
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        update() {
+            if (!this.target || this.target.isDead) {
+                this.isDead = true;
+                return;
+            }
+
+            const dx = this.target.x - this.x;
+            const dy = this.target.y - this.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            if (distance < this.speed) {
+                // 命中目標
+                this.target.health -= this.damage;
+                this.isDead = true;
+
+                if (this.target.health <= 0) {
+                    this.target.isDead = true;
+                    gameState.gold += this.target.reward;
+                    gameState.enemiesRemainingInWave--;
+                }
+            } else {
+                // 移動
+                this.x += (dx / distance) * this.speed;
+                this.y += (dy / distance) * this.speed;
+            }
+        }
+    }
+
+
+    // --- 遊戲邏輯函數 ---
+
+    function updateUI() {
+        goldDisplay.textContent = gameState.gold;
+        livesDisplay.textContent = gameState.lives;
+        waveDisplay.textContent = gameState.wave;
+        highScoreDisplay.textContent = window.highScore;
+
+        // 判斷購買按鈕狀態
+        buyBasicBtn.disabled = gameState.gold < TOWER_COSTS.BASIC || (gameState.placingTower && gameState.currentTowerTypeToPlace !== TOWER_TYPES.BASIC);
+        buyBasicBtn.classList.toggle('opacity-50', buyBasicBtn.disabled);
+        buySlowBtn.disabled = gameState.gold < TOWER_COSTS.SLOW || (gameState.placingTower && gameState.currentTowerTypeToPlace !== TOWER_TYPES.SLOW);
+        buySlowBtn.classList.toggle('opacity-50', buySlowBtn.disabled);
+
+        // 突出顯示當前選中的購買按鈕
+        buyBasicBtn.classList.toggle('selected-buy', gameState.placingTower && gameState.currentTowerTypeToPlace === TOWER_TYPES.BASIC);
+        buySlowBtn.classList.toggle('selected-buy', gameState.placingTower && gameState.currentTowerTypeToPlace === TOWER_TYPES.SLOW);
+        
+        // 判斷開始波次按鈕狀態
+        startWaveBtn.disabled = gameState.isWaveActive || gameState.gameOver || gameState.placingTower;
+        startWaveBtn.classList.toggle('opacity-50', startWaveBtn.disabled);
+    }
+    
+    // 繪製路徑
+    function drawPath() {
+        ctx.strokeStyle = '#4b0082'; // 靛紫色
+        ctx.lineWidth = GRID_SIZE;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        
+        for (let i = 0; i < path.length; i++) {
+            const coords = getPixelCoords(path[i].x, path[i].y);
+            if (i === 0) {
+                ctx.moveTo(coords.x, coords.y);
+            } else {
+                ctx.lineTo(coords.x, coords.y);
+            }
+        }
+        ctx.stroke();
+        ctx.lineCap = 'butt';
+    }
+
+    // 繪製網格
+    function drawGrid() {
+        ctx.strokeStyle = '#333333';
+        ctx.lineWidth = 1;
+
+        // 繪製垂直線
+        for (let x = 0; x <= canvas.width; x += GRID_SIZE) {
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, canvas.height);
+            ctx.stroke();
+        }
+
+        // 繪製水平線
+        for (let y = 0; y <= canvas.height; y += GRID_SIZE) {
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(canvas.width, y);
+            ctx.stroke();
+        }
+    }
+
+    // 波次生成器
+    let spawnTimer = 0;
+    const SPAWN_INTERVAL = 40; // 40 幀生成一個敵人
+
+    function spawnEnemy() {
+        if (gameState.enemiesSpawnedInWave < gameState.totalEnemiesInWave) {
+            enemies.push(new Enemy(gameState.wave));
+            gameState.enemiesSpawnedInWave++;
+            spawnTimer = SPAWN_INTERVAL;
+        }
+    }
+
+    function startWave() {
+        if (gameState.isWaveActive || gameState.gameOver) return;
+
+        gameState.wave++;
+        // 增加難度：每波次的敵人數量
+        gameState.totalEnemiesInWave = 10 + gameState.wave * 5;
+        gameState.enemiesRemainingInWave = gameState.totalEnemiesInWave;
+        gameState.enemiesSpawnedInWave = 0;
+        gameState.isWaveActive = true;
+        gameMessage.textContent = `波次 ${gameState.wave} 開始!`;
+        startWaveBtn.textContent = '進行中...';
+        
+        // 更新最高紀錄
+        if (window.firebaseInitialized && gameState.wave > window.highScore) {
+            window.saveHighScore(gameState.wave);
+        }
+    }
+
+    // --- 遊戲迴圈 ---
+
+    function gameLoop() {
+        if (gameState.gameOver) {
+            gameMessage.textContent = `遊戲結束！您堅持到了第 ${gameState.wave} 波。重新整理來再次挑戰！`;
+            startWaveBtn.textContent = '遊戲結束';
+            updateUI();
+            return;
+        }
+
+        // 1. 清除畫布
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 2. 繪製路徑
+        drawPath();
+
+        // 3. 更新與繪製物件
+        
+        // 塔
+        towers.forEach(t => t.update());
+        towers.forEach(t => t.draw());
+        
+        // 投射物
+        projectiles.forEach(p => p.update());
+        projectiles = projectiles.filter(p => !p.isDead);
+        projectiles.forEach(p => p.draw());
+
+        // 敵人 (必須在塔之後更新，因為塔的 update() 會在敵人身上設置 slowMultiplier)
+        enemies.forEach(e => e.update()); 
+        enemies = enemies.filter(e => !e.isDead); 
+        enemies.forEach(e => e.draw());
+
+        // 4. 遊戲狀態檢查與更新
+        
+        // 敵人生成
+        if (gameState.isWaveActive) {
+            if (spawnTimer > 0) {
+                spawnTimer--;
+            } else {
+                spawnEnemy();
+            }
+
+            // 波次結束檢查
+            if (gameState.enemiesSpawnedInWave >= gameState.totalEnemiesInWave && enemies.length === 0) {
+                gameState.isWaveActive = false;
+                gameState.gold += 150; // 波次獎勵
+                gameMessage.textContent = `波次 ${gameState.wave} 完成！獲得獎勵金幣 $150`;
+                startWaveBtn.textContent = '開始下一波';
+            }
+        }
+
+        // 遊戲結束檢查
+        if (gameState.lives <= 0) {
+            gameState.gameOver = true;
+        }
+        
+        // 5. 更新 UI
+        updateUI();
+
+        // 6. 請求下一幀
+        requestAnimationFrame(gameLoop);
+    }
+    
+    // --- 事件處理 ---
+
+    // 設置購買模式
+    function setPlacingTower(type) {
+        if (gameState.placingTower && gameState.currentTowerTypeToPlace === type) {
+            // 取消放置模式
+            gameState.placingTower = false;
+            gameState.currentTowerTypeToPlace = null;
+            // 提示文字調整: 清晰告知已取消放置
+            gameMessage.textContent = '已取消放置。點擊「開始波次」來啟動！';
+            canvas.style.cursor = 'default';
+        } else if (gameState.gold >= TOWER_COSTS[type]) {
+            // 進入放置模式
+            gameState.placingTower = true;
+            gameState.currentTowerTypeToPlace = type;
+            // 提示文字調整: 清楚說明操作和如何取消
+            gameMessage.textContent = `放置模式中：點擊地圖空地放置 ${type === TOWER_TYPES.BASIC ? '攻擊塔' : '減速塔'} ($${TOWER_COSTS[type]})。再次點擊購買按鈕可取消。`;
+            canvas.style.cursor = 'crosshair';
+        } else {
+            gameMessage.textContent = '金幣不足！';
+        }
+        updateUI();
+    }
+
+    buyBasicBtn.addEventListener('click', () => setPlacingTower(TOWER_TYPES.BASIC));
+    buySlowBtn.addEventListener('click', () => setPlacingTower(TOWER_TYPES.SLOW));
+
+    startWaveBtn.addEventListener('click', startWave);
+
+    // 畫布點擊事件 (用於放置塔)
+    canvas.addEventListener('click', (event) => {
+        if (!gameState.placingTower || !gameState.currentTowerTypeToPlace) return;
+
+        const rect = canvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+        
+        const gridX = Math.floor(x / GRID_SIZE);
+        const gridY = Math.floor(y / GRID_SIZE);
+        const cost = TOWER_COSTS[gameState.currentTowerTypeToPlace];
+
+        // 檢查是否超出邊界
+        if (gridX < 0 || gridX >= COLS || gridY < 0 || gridY >= ROWS) return;
+        
+        // 檢查是否在路徑上
+        if (isPathTile(gridX, gridY)) {
+            gameMessage.textContent = '無法在路徑上放置塔！';
+            return;
+        }
+
+        // 檢查是否已有塔
+        const isOccupied = towers.some(t => t.gridX === gridX && t.gridY === gridY);
+        if (isOccupied) {
+            gameMessage.textContent = '該位置已經有塔了！';
+            return;
+        }
+        
+        // 檢查金幣是否足夠 (雖然按鈕已檢查，但再檢查一次更安全)
+        if (gameState.gold < cost) {
+            gameMessage.textContent = '金幣不足！';
+            return;
+        }
+
+        // 2. 放置塔
+        let newTower;
+        if (gameState.currentTowerTypeToPlace === TOWER_TYPES.BASIC) {
+            newTower = new BasicTower(gridX, gridY);
+        } else if (gameState.currentTowerTypeToPlace === TOWER_TYPES.SLOW) {
+            newTower = new SlowTower(gridX, gridY);
+        } else {
+            return; // 錯誤的塔類型
+        }
+        
+        towers.push(newTower);
+        gameState.gold -= cost;
+        
+        // 提示文字調整: 清楚說明放置後可繼續放置或取消
+        gameMessage.textContent = `${newTower.type === TOWER_TYPES.BASIC ? '攻擊塔' : '減速塔'} 已放置！繼續點擊地圖空地放置，或點擊購買按鈕取消。`;
+        canvas.style.cursor = 'crosshair';
+        updateUI();
+    });
+
+    // 畫布滑鼠移動事件 (用於預覽放置位置)
+    canvas.addEventListener('mousemove', (event) => {
+        if (!gameState.placingTower || !gameState.currentTowerTypeToPlace) return;
+
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = event.clientX - rect.left;
+        const mouseY = event.clientY - rect.top;
+        
+        const type = gameState.currentTowerTypeToPlace;
+        const range = type === TOWER_TYPES.BASIC ? GRID_SIZE * 3.5 : GRID_SIZE * 2.5;
+
+        // 繪製預覽圈 (在下一幀遊戲迴圈中處理)
+        window.previewTower = {
+            gridX: Math.floor(mouseX / GRID_SIZE),
+            gridY: Math.floor(mouseY / GRID_SIZE),
+            range: range,
+            color: type === TOWER_TYPES.BASIC ? '#ff80ed' : '#FFC107',
+            type: type
+        };
+    });
+
+    // 遊戲啟動 (保持不變)
+    window.onload = function () {
+        const checkFirebase = setInterval(() => {
+            if (window.firebaseInitialized || typeof __firebase_config === 'undefined') {
+                clearInterval(checkFirebase);
+                requestAnimationFrame(gameLoop); 
+            }
+        }, 100);
+        
+        updateUI();
+    };
+
+    // 覆寫 gameLoop 來處理預覽繪製 (更新以處理兩種塔)
+    const originalGameLoop = gameLoop;
+    window.previewTower = null;
+
+    gameLoop = function() {
+        originalGameLoop();
+
+        // 繪製放置預覽
+        if (gameState.placingTower && window.previewTower) {
+            const { gridX, gridY, range, color, type } = window.previewTower;
+            const x = gridX * GRID_SIZE + GRID_SIZE / 2;
+            const y = gridY * GRID_SIZE + GRID_SIZE / 2;
+            
+            // 檢查是否是有效位置
+            const isValid = !isPathTile(gridX, gridY) && 
+                            !towers.some(t => t.gridX === gridX && t.gridY === gridY);
+
+            // 繪製範圍圈
+            ctx.strokeStyle = isValid ? 'rgba(0, 255, 0, 0.5)' : 'rgba(255, 0, 0, 0.5)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(x, y, range, 0, Math.PI * 2);
+            ctx.stroke();
+
+            // 繪製塔形狀
+            ctx.fillStyle = isValid ? color : 'rgba(255, 0, 0, 0.4)';
+            ctx.beginPath();
+            ctx.arc(x, y, 18, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 繪製網格
+            drawGrid();
+        }
+    }
+
+
+</script>
+</body>
+</html>
