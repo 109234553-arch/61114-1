@@ -128,6 +128,7 @@
         }
 
         .game-container {
+            position: relative; /* 為了讓升級面板定位 */
             display: flex;
             flex-direction: column;
             gap: 20px;
@@ -227,6 +228,55 @@
             margin-top: 10px;
         }
         
+        /* 升級面板樣式 */
+        #upgrade-panel {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #1e003a;
+            border: 3px solid #ffcc80;
+            border-radius: 10px;
+            padding: 20px;
+            width: 250px;
+            z-index: 10;
+            box-shadow: 0 0 20px rgba(255, 204, 128, 0.5);
+            color: white;
+        }
+        #upgrade-panel h3 {
+            font-size: 1.5rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+            text-align: center;
+            color: #ffcc80;
+        }
+        #upgrade-panel p {
+            margin-bottom: 8px;
+            font-size: 1rem;
+        }
+        .upgrade-button {
+            width: 100%;
+            background-color: #00897b;
+            color: white;
+            padding: 10px;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            margin-top: 10px;
+        }
+        .upgrade-button:hover {
+            background-color: #00695c;
+        }
+        .close-button {
+            position: absolute;
+            top: 5px;
+            right: 10px;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: #ffcc80;
+        }
+        
         /* 手機響應式調整 */
         @media (max-width: 768px) {
             .game-container {
@@ -259,7 +309,7 @@
             <div class="status-item">
                 <!-- 錢幣圖示 (SVG) -->
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-yellow-400"><circle cx="12" cy="12" r="10"></circle><path d="M16 8h-4a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4h-4"></path><path d="M12 18V6"></path></svg>
-                金幣: <span id="gold">200</span>
+                金幣: <span id="gold">600</span>
             </div>
             <div class="status-item">
                 <!-- 生命圖示 (SVG) -->
@@ -275,8 +325,8 @@
         </div>
 
         <div class="control-panel">
-            <button id="buy-basic-btn" class="control-button buy-basic-button">購買攻擊塔 ($100)</button>
-            <button id="buy-slow-btn" class="control-button buy-slow-button">購買減速塔 ($150)</button>
+            <button id="buy-basic-btn" class="control-button buy-basic-button">購買攻擊塔 ($200)</button>
+            <button id="buy-slow-btn" class="control-button buy-slow-button">購買減速塔 ($300)</button>
             <button id="start-wave-btn" class="control-button start-wave-button">開始波次</button>
         </div>
     </div>
@@ -285,6 +335,21 @@
     <canvas id="gameCanvas" width="800" height="600"></canvas>
     
     <div id="game-message" class="game-message">點擊「開始波次」來啟動！</div>
+    
+    <!-- 升級面板 (隱藏) -->
+    <div id="upgrade-panel" style="display: none;">
+        <span class="close-button" onclick="window.hideUpgradePanel()">&times;</span>
+        <h3>塔防資訊</h3>
+        <p>類型: <span id="tower-type"></span></p>
+        <p>等級: <span id="tower-level"></span></p>
+        <p>傷害/緩速: <span id="tower-stat"></span></p>
+        <div id="upgrade-details">
+            <p>升級費用: $<span id="upgrade-cost"></span></p>
+            <p>新傷害/緩速: <span id="new-stat"></span></p>
+            <button id="upgrade-btn" class="upgrade-button">升級！</button>
+        </div>
+        <p id="max-level-msg" class="text-red-400" style="display: none; text-align: center;">已達最高等級！</p>
+    </div>
 </div>
 
 <script type="module">
@@ -305,6 +370,17 @@
     const startWaveBtn = document.getElementById('start-wave-btn');
     const buyBasicBtn = document.getElementById('buy-basic-btn');
     const buySlowBtn = document.getElementById('buy-slow-btn');
+    
+    // 升級面板 UI 元素
+    const upgradePanel = document.getElementById('upgrade-panel');
+    const towerTypeEl = document.getElementById('tower-type');
+    const towerLevelEl = document.getElementById('tower-level');
+    const towerStatEl = document.getElementById('tower-stat');
+    const upgradeDetailsEl = document.getElementById('upgrade-details');
+    const upgradeCostEl = document.getElementById('upgrade-cost');
+    const newStatEl = document.getElementById('new-stat');
+    const upgradeBtn = document.getElementById('upgrade-btn');
+    const maxLevelMsgEl = document.getElementById('max-level-msg');
 
     // 塔類型定義
     const TOWER_TYPES = {
@@ -313,22 +389,23 @@
     };
     
     const TOWER_COSTS = {
-        [TOWER_TYPES.BASIC]: 100,
-        [TOWER_TYPES.SLOW]: 150
+        [TOWER_TYPES.BASIC]: 200, // L1 價格
+        [TOWER_TYPES.SLOW]: 300 // L1 價格
     };
 
     // 遊戲狀態
     let gameState = {
-        gold: 200,
+        gold: 600, // 初始金幣
         lives: 20,
         wave: 0,
         isWaveActive: false,
         placingTower: false,
-        currentTowerTypeToPlace: null, // 新增：當前要放置的塔類型
+        currentTowerTypeToPlace: null,
         gameOver: false,
         enemiesSpawnedInWave: 0,
         enemiesRemainingInWave: 0,
         totalEnemiesInWave: 0,
+        selectedTower: null, // 新增：當前選中的塔
     };
     
     // 遊戲物件陣列
@@ -384,18 +461,21 @@
             this.x = startCoords.x;
             this.y = startCoords.y;
             this.radius = 12;
-            this.baseSpeed = 0.5 + wave * 0.05;
-            this.slowMultiplier = 1; // 新增：緩速乘數 (1 = 正常速度)
-            this.health = 50 + wave * 15;
+            // 速度
+            this.baseSpeed = (0.5 + wave * 0.05) * 2.5; 
+            this.slowMultiplier = 1; // 緩速乘數 (1 = 正常速度)
+            
+            // 敵人血量計算：二次方增長
+            this.health = 100 + (wave * 30) + (wave * wave * 5); 
+            
             this.maxHealth = this.health;
-            this.reward = 10 + Math.floor(wave / 2) * 5;
-            this.color = `hsl(${wave * 30 % 360}, 70%, 50%)`; // 根據波次變換顏色
-            this.isSlowed = false; // 追蹤是否被緩速，用於繪圖
+            this.reward = 20 + Math.floor(wave / 2) * 10;
+            this.color = `hsl(${wave * 30 % 360}, 70%, 50%)`;
+            this.isSlowed = false;
         }
 
         draw() {
             ctx.fillStyle = this.color;
-            // 如果被緩速，繪製藍色光暈
             if (this.isSlowed) {
                 ctx.shadowColor = '#00BFFF';
                 ctx.shadowBlur = 10;
@@ -406,7 +486,7 @@
             ctx.beginPath();
             ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
             ctx.fill();
-            ctx.shadowBlur = 0; // 重置陰影
+            ctx.shadowBlur = 0; 
 
             // 繪製血條
             const healthBarWidth = this.radius * 2;
@@ -429,9 +509,8 @@
                 return;
             }
 
-            // 計算當前速度 (受緩速影響)
             const speed = this.baseSpeed * this.slowMultiplier;
-            this.isSlowed = this.slowMultiplier < 1; // 判斷是否被緩速
+            this.isSlowed = this.slowMultiplier < 1;
 
             const target = getPixelCoords(path[this.pathIndex + 1].x, path[this.pathIndex + 1].y);
             const dx = target.x - this.x;
@@ -445,7 +524,6 @@
                 this.y += (dy / distance) * speed;
             }
             
-            // 重置緩速乘數，由 SlowTower 在每幀重新施加
             this.slowMultiplier = 1; 
         }
     }
@@ -460,10 +538,12 @@
             this.y = pixelCoords.y;
             this.range = range || GRID_SIZE * 3.5;
             this.color = color;
+            this.level = 1; // 新增等級
+            this.maxLevel = 2; // 最高等級
         }
 
-        drawRange(alpha = 0.3) {
-            ctx.strokeStyle = `rgba(255, 128, 237, ${alpha})`;
+        drawRange(alpha = 0.3, color = '#ff80ed') {
+            ctx.strokeStyle = `rgba(${parseInt(color.slice(1, 3), 16)}, ${parseInt(color.slice(3, 5), 16)}, ${parseInt(color.slice(5, 7), 16)}, ${alpha})`;
             ctx.lineWidth = 2;
             ctx.beginPath();
             ctx.arc(this.x, this.y, this.range, 0, Math.PI * 2);
@@ -482,38 +562,95 @@
             ctx.beginPath();
             ctx.fillRect(this.x - 8, this.y - 15, 16, 30);
             ctx.fill();
+
+            // 繪製等級標示
+            ctx.fillStyle = '#FFFFFF';
+            ctx.font = 'bold 10px Inter';
+            ctx.textAlign = 'center';
+            ctx.fillText(`L${this.level}`, this.x, this.y + 20);
+            
+            // 如果是選中的塔，繪製高亮邊框
+            if (gameState.selectedTower === this) {
+                 ctx.strokeStyle = '#00FFFF'; // 青色高亮
+                 ctx.lineWidth = 3;
+                 ctx.beginPath();
+                 ctx.arc(this.x, this.y, 20, 0, Math.PI * 2);
+                 ctx.stroke();
+            }
+        }
+        
+        getUpgradeCost() {
+            return 0; // 由子類覆寫
         }
 
-        // 佔位方法，由子類實作
+        getUpgradeStats() {
+            return {}; // 由子類覆寫
+        }
+        
+        upgrade() {
+            if (this.level >= this.maxLevel) return false;
+            
+            const cost = this.getUpgradeCost();
+            if (gameState.gold < cost) return false;
+            
+            gameState.gold -= cost;
+            this.level++;
+            return true;
+        }
+
         update() {} 
     }
 
-    // 攻擊塔 (原 Tower)
+    // 攻擊塔
     class BasicTower extends BaseTower {
         constructor(gridX, gridY) {
             super(gridX, gridY, '#ff80ed', GRID_SIZE * 3.5);
-            this.attackSpeed = 60; // 60 幀攻擊一次 (1 秒)
+            this.attackSpeed = 60;
             this.cooldown = 0;
-            this.projectileDamage = 20;
+            this.projectileDamage = 40;
             this.target = null;
             this.type = TOWER_TYPES.BASIC;
         }
 
         draw() {
             super.draw();
-            // 繪製範圍 (僅在放置時)
             if (gameState.placingTower && gameState.currentTowerTypeToPlace === this.type) {
                 this.drawRange();
             }
         }
 
+        // 定義升級成本和效果
+        getUpgradeCost() {
+            return this.level === 1 ? 400 : Infinity;
+        }
+
+        getUpgradeStats() {
+            if (this.level === 1) {
+                return {
+                    newDamage: 80,
+                    newRange: GRID_SIZE * 4.5
+                };
+            }
+            return { newDamage: this.projectileDamage, newRange: this.range };
+        }
+
+        upgrade() {
+            if (super.upgrade()) {
+                // L2 升級效果
+                this.projectileDamage = 80;
+                this.range = GRID_SIZE * 4.5;
+                gameMessage.textContent = '攻擊塔升級至 L2：傷害翻倍！';
+                return true;
+            }
+            return false;
+        }
+        
         update() {
             if (this.cooldown > 0) {
                 this.cooldown--;
                 return;
             }
 
-            // 尋找目標
             this.target = null;
             let closestDistanceSq = this.range * this.range;
 
@@ -528,7 +665,6 @@
                 }
             }
 
-            // 攻擊
             if (this.target) {
                 this.fire();
             }
@@ -550,19 +686,44 @@
     // 減速塔
     class SlowTower extends BaseTower {
         constructor(gridX, gridY) {
-            super(gridX, gridY, '#FFC107', GRID_SIZE * 2.5); // 較小的範圍
-            this.slowFactor = 0.5; // 減速 50%
+            super(gridX, gridY, '#FFC107', GRID_SIZE * 2.5);
+            this.slowFactor = 0.5; // L1: 50% slow
             this.type = TOWER_TYPES.SLOW;
         }
 
         draw() {
             super.draw();
-            // 繪製減速塔的圓形光環 (即使在放置時)
-            this.drawRange(0.2); // 始終繪製範圍，但更透明
+            this.drawRange(0.2, this.color); // 繪製緩速光環
             
             if (gameState.placingTower && gameState.currentTowerTypeToPlace === this.type) {
-                this.drawRange(0.5);
+                this.drawRange(0.5, this.color);
             }
+        }
+        
+        // 定義升級成本和效果
+        getUpgradeCost() {
+            return this.level === 1 ? 500 : Infinity;
+        }
+
+        getUpgradeStats() {
+            if (this.level === 1) {
+                return {
+                    newSlow: '75%', // 1 - 0.25
+                    newRange: GRID_SIZE * 3.5
+                };
+            }
+            return { newSlow: `${(1 - this.slowFactor) * 100}%`, newRange: this.range };
+        }
+
+        upgrade() {
+            if (super.upgrade()) {
+                // L2 升級效果
+                this.slowFactor = 0.25; // L2: 75% slow (0.25倍速)
+                this.range = GRID_SIZE * 3.5;
+                gameMessage.textContent = '減速塔升級至 L2：緩速效果更強！';
+                return true;
+            }
+            return false;
         }
 
         update() {
@@ -573,7 +734,6 @@
                 const distanceSq = dx * dx + dy * dy;
 
                 if (distanceSq <= this.range * this.range) {
-                    // 應用緩速乘數 (取最小值確保不會覆蓋更強的緩速效果，雖然目前只有一種)
                     enemy.slowMultiplier = Math.min(enemy.slowMultiplier, this.slowFactor);
                 }
             }
@@ -587,16 +747,10 @@
             this.y = y;
             this.target = target;
             this.damage = damage;
-            this.speed = 7;
+            // 砲彈速度
+            this.speed = 7 * 1.5;
             this.radius = 4;
             this.color = '#00ffff'; // 青色
-        }
-
-        draw() {
-            ctx.fillStyle = this.color;
-            ctx.beginPath();
-            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-            ctx.fill();
         }
 
         update() {
@@ -620,12 +774,89 @@
                     gameState.enemiesRemainingInWave--;
                 }
             } else {
-                // 移動
-                this.x += (dx / distance) * this.speed;
-                this.y += (dy / distance) * this.speed;
+                // 移動 
+                this.x += (dx / distance) * this.speed; 
+                this.y += (dy / distance) * this.speed; 
             }
         }
+
+        draw() {
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fill();
+        }
     }
+
+
+    // --- UI 與面板控制 ---
+
+    function showUpgradePanel(tower) {
+        gameState.placingTower = false;
+        gameState.currentTowerTypeToPlace = null;
+        gameState.selectedTower = tower;
+        
+        // 確保升級面板出現在畫布區域中央
+        const rect = canvas.getBoundingClientRect();
+        upgradePanel.style.left = `${rect.left + rect.width / 2}px`;
+        upgradePanel.style.top = `${rect.top + rect.height / 2}px`;
+
+        towerTypeEl.textContent = tower.type === TOWER_TYPES.BASIC ? '攻擊塔' : '減速塔';
+        towerLevelEl.textContent = tower.level;
+        
+        if (tower.type === TOWER_TYPES.BASIC) {
+            towerStatEl.textContent = `${tower.projectileDamage} 點傷害`;
+        } else {
+            towerStatEl.textContent = `${(1 - tower.slowFactor) * 100}% 緩速`;
+        }
+
+        if (tower.level < tower.maxLevel) {
+            upgradeDetailsEl.style.display = 'block';
+            maxLevelMsgEl.style.display = 'none';
+
+            const cost = tower.getUpgradeCost();
+            const stats = tower.getUpgradeStats();
+            
+            upgradeCostEl.textContent = cost;
+            
+            if (tower.type === TOWER_TYPES.BASIC) {
+                newStatEl.textContent = `${stats.newDamage} 點傷害 (射程增加)`;
+            } else {
+                newStatEl.textContent = `${stats.newSlow} 緩速 (射程增加)`;
+            }
+
+            upgradeBtn.disabled = gameState.gold < cost;
+            upgradeBtn.textContent = upgradeBtn.disabled ? `金幣不足 ($${cost})` : `升級 ($${cost})`;
+        } else {
+            upgradeDetailsEl.style.display = 'none';
+            maxLevelMsgEl.style.display = 'block';
+        }
+
+        upgradePanel.style.display = 'block';
+        gameMessage.textContent = `已選擇 ${towerTypeEl.textContent} (L${tower.level})。`;
+        canvas.style.cursor = 'default';
+        updateUI();
+    }
+
+    window.hideUpgradePanel = function() {
+        upgradePanel.style.display = 'none';
+        gameState.selectedTower = null;
+        gameMessage.textContent = '已取消選取。';
+        updateUI();
+    }
+    
+    // 升級按鈕事件處理
+    upgradeBtn.onclick = function() {
+        if (!gameState.selectedTower || gameState.selectedTower.level >= gameState.selectedTower.maxLevel) return;
+
+        if (gameState.selectedTower.upgrade()) {
+            // 升級成功，更新面板並隱藏
+            showUpgradePanel(gameState.selectedTower); // 重新渲染面板資訊
+            window.hideUpgradePanel();
+        } else {
+            gameMessage.textContent = '升級失敗：金幣不足！';
+        }
+    };
 
 
     // --- 遊戲邏輯函數 ---
@@ -636,18 +867,30 @@
         waveDisplay.textContent = gameState.wave;
         highScoreDisplay.textContent = window.highScore;
 
-        // 判斷購買按鈕狀態
-        buyBasicBtn.disabled = gameState.gold < TOWER_COSTS.BASIC || (gameState.placingTower && gameState.currentTowerTypeToPlace !== TOWER_TYPES.BASIC);
+        const isSelected = gameState.selectedTower !== null;
+
+        // *** 修正重點：解除按鈕鎖定邏輯 ***
+        // 只有當升級面板打開時，才完全鎖定購買按鈕
+        // 如果是在放置模式，允許點擊當前選中的按鈕來取消
+        // 如果金幣不足，則禁用（除非它是當前正在放置的塔，這樣才能點擊它來取消）
+        
+        // 攻擊塔按鈕
+        const isPlacingBasic = gameState.placingTower && gameState.currentTowerTypeToPlace === TOWER_TYPES.BASIC;
+        buyBasicBtn.disabled = isSelected || (!isPlacingBasic && gameState.gold < TOWER_COSTS.BASIC);
+
+        // 減速塔按鈕
+        const isPlacingSlow = gameState.placingTower && gameState.currentTowerTypeToPlace === TOWER_TYPES.SLOW;
+        buySlowBtn.disabled = isSelected || (!isPlacingSlow && gameState.gold < TOWER_COSTS.SLOW);
+        
         buyBasicBtn.classList.toggle('opacity-50', buyBasicBtn.disabled);
-        buySlowBtn.disabled = gameState.gold < TOWER_COSTS.SLOW || (gameState.placingTower && gameState.currentTowerTypeToPlace !== TOWER_TYPES.SLOW);
         buySlowBtn.classList.toggle('opacity-50', buySlowBtn.disabled);
 
-        // 突出顯示當前選中的購買按鈕
-        buyBasicBtn.classList.toggle('selected-buy', gameState.placingTower && gameState.currentTowerTypeToPlace === TOWER_TYPES.BASIC);
-        buySlowBtn.classList.toggle('selected-buy', gameState.placingTower && gameState.currentTowerTypeToPlace === TOWER_TYPES.SLOW);
+        // 視覺上標示正在放置的塔
+        buyBasicBtn.classList.toggle('selected-buy', isPlacingBasic);
+        buySlowBtn.classList.toggle('selected-buy', isPlacingSlow);
         
-        // 判斷開始波次按鈕狀態
-        startWaveBtn.disabled = gameState.isWaveActive || gameState.gameOver || gameState.placingTower;
+        // 開始波次按鈕狀態
+        startWaveBtn.disabled = gameState.isWaveActive || gameState.gameOver || gameState.placingTower || isSelected;
         startWaveBtn.classList.toggle('opacity-50', startWaveBtn.disabled);
     }
     
@@ -708,7 +951,6 @@
         if (gameState.isWaveActive || gameState.gameOver) return;
 
         gameState.wave++;
-        // 增加難度：每波次的敵人數量
         gameState.totalEnemiesInWave = 10 + gameState.wave * 5;
         gameState.enemiesRemainingInWave = gameState.totalEnemiesInWave;
         gameState.enemiesSpawnedInWave = 0;
@@ -716,10 +958,10 @@
         gameMessage.textContent = `波次 ${gameState.wave} 開始!`;
         startWaveBtn.textContent = '進行中...';
         
-        // 更新最高紀錄
         if (window.firebaseInitialized && gameState.wave > window.highScore) {
             window.saveHighScore(gameState.wave);
         }
+        window.hideUpgradePanel(); // 開始波次時隱藏面板
     }
 
     // --- 遊戲迴圈 ---
@@ -740,23 +982,24 @@
 
         // 3. 更新與繪製物件
         
-        // 塔
         towers.forEach(t => t.update());
         towers.forEach(t => t.draw());
         
-        // 投射物
+        // 如果有選中的塔，繪製其射程
+        if (gameState.selectedTower) {
+            gameState.selectedTower.drawRange(0.4, gameState.selectedTower.color);
+        }
+
         projectiles.forEach(p => p.update());
         projectiles = projectiles.filter(p => !p.isDead);
         projectiles.forEach(p => p.draw());
 
-        // 敵人 (必須在塔之後更新，因為塔的 update() 會在敵人身上設置 slowMultiplier)
         enemies.forEach(e => e.update()); 
         enemies = enemies.filter(e => !e.isDead); 
         enemies.forEach(e => e.draw());
 
         // 4. 遊戲狀態檢查與更新
         
-        // 敵人生成
         if (gameState.isWaveActive) {
             if (spawnTimer > 0) {
                 spawnTimer--;
@@ -764,16 +1007,14 @@
                 spawnEnemy();
             }
 
-            // 波次結束檢查
             if (gameState.enemiesSpawnedInWave >= gameState.totalEnemiesInWave && enemies.length === 0) {
                 gameState.isWaveActive = false;
-                gameState.gold += 150; // 波次獎勵
-                gameMessage.textContent = `波次 ${gameState.wave} 完成！獲得獎勵金幣 $150`;
+                gameState.gold += 200; // 波次獎勵
+                gameMessage.textContent = `波次 ${gameState.wave} 完成！獲得獎勵金幣 $200`;
                 startWaveBtn.textContent = '開始下一波';
             }
         }
 
-        // 遊戲結束檢查
         if (gameState.lives <= 0) {
             gameState.gameOver = true;
         }
@@ -789,19 +1030,19 @@
 
     // 設置購買模式
     function setPlacingTower(type) {
+        window.hideUpgradePanel(); // 進入購買模式時隱藏升級面板
+
         if (gameState.placingTower && gameState.currentTowerTypeToPlace === type) {
             // 取消放置模式
             gameState.placingTower = false;
             gameState.currentTowerTypeToPlace = null;
-            // 提示文字調整: 清晰告知已取消放置
             gameMessage.textContent = '已取消放置。點擊「開始波次」來啟動！';
             canvas.style.cursor = 'default';
         } else if (gameState.gold >= TOWER_COSTS[type]) {
             // 進入放置模式
             gameState.placingTower = true;
             gameState.currentTowerTypeToPlace = type;
-            // 提示文字調整: 清楚說明操作和如何取消
-            gameMessage.textContent = `放置模式中：點擊地圖空地放置 ${type === TOWER_TYPES.BASIC ? '攻擊塔' : '減速塔'} ($${TOWER_COSTS[type]})。再次點擊購買按鈕可取消。`;
+            gameMessage.textContent = `放置模式中：點擊地圖空地放置 ${type === TOWER_TYPES.BASIC ? '攻擊塔' : '減速塔'} ($${TOWER_COSTS[type]})。再次點擊購買按鈕可取消。右鍵可快速取消。`;
             canvas.style.cursor = 'crosshair';
         } else {
             gameMessage.textContent = '金幣不足！';
@@ -813,58 +1054,94 @@
     buySlowBtn.addEventListener('click', () => setPlacingTower(TOWER_TYPES.SLOW));
 
     startWaveBtn.addEventListener('click', startWave);
+    
+    // *** 新增：右鍵點擊取消功能 ***
+    canvas.addEventListener('contextmenu', (event) => {
+        event.preventDefault(); // 防止瀏覽器右鍵選單
+        
+        if (gameState.placingTower) {
+            gameState.placingTower = false;
+            gameState.currentTowerTypeToPlace = null;
+            gameMessage.textContent = '已取消放置。';
+            canvas.style.cursor = 'default';
+            updateUI();
+        } else if (gameState.selectedTower) {
+            window.hideUpgradePanel();
+        }
+    });
 
-    // 畫布點擊事件 (用於放置塔)
+    // 畫布點擊事件 (用於放置塔或選中塔)
     canvas.addEventListener('click', (event) => {
-        if (!gameState.placingTower || !gameState.currentTowerTypeToPlace) return;
-
         const rect = canvas.getBoundingClientRect();
         const x = event.clientX - rect.left;
         const y = event.clientY - rect.top;
         
         const gridX = Math.floor(x / GRID_SIZE);
         const gridY = Math.floor(y / GRID_SIZE);
-        const cost = TOWER_COSTS[gameState.currentTowerTypeToPlace];
 
-        // 檢查是否超出邊界
-        if (gridX < 0 || gridX >= COLS || gridY < 0 || gridY >= ROWS) return;
-        
-        // 檢查是否在路徑上
-        if (isPathTile(gridX, gridY)) {
-            gameMessage.textContent = '無法在路徑上放置塔！';
-            return;
-        }
+        if (gameState.placingTower && gameState.currentTowerTypeToPlace) {
+            // --- 放置塔邏輯 ---
+            const cost = TOWER_COSTS[gameState.currentTowerTypeToPlace];
 
-        // 檢查是否已有塔
-        const isOccupied = towers.some(t => t.gridX === gridX && t.gridY === gridY);
-        if (isOccupied) {
-            gameMessage.textContent = '該位置已經有塔了！';
-            return;
-        }
-        
-        // 檢查金幣是否足夠 (雖然按鈕已檢查，但再檢查一次更安全)
-        if (gameState.gold < cost) {
-            gameMessage.textContent = '金幣不足！';
-            return;
-        }
+            if (gridX < 0 || gridX >= COLS || gridY < 0 || gridY >= ROWS) return;
+            
+            if (isPathTile(gridX, gridY)) {
+                gameMessage.textContent = '無法在路徑上放置塔！';
+                return;
+            }
 
-        // 2. 放置塔
-        let newTower;
-        if (gameState.currentTowerTypeToPlace === TOWER_TYPES.BASIC) {
-            newTower = new BasicTower(gridX, gridY);
-        } else if (gameState.currentTowerTypeToPlace === TOWER_TYPES.SLOW) {
-            newTower = new SlowTower(gridX, gridY);
+            const isOccupied = towers.some(t => t.gridX === gridX && t.gridY === gridY);
+            if (isOccupied) {
+                gameMessage.textContent = '該位置已經有塔了！';
+                return;
+            }
+            
+            if (gameState.gold < cost) {
+                gameMessage.textContent = '金幣不足！';
+                return;
+            }
+
+            let newTower;
+            if (gameState.currentTowerTypeToPlace === TOWER_TYPES.BASIC) {
+                newTower = new BasicTower(gridX, gridY);
+            } else if (gameState.currentTowerTypeToPlace === TOWER_TYPES.SLOW) {
+                newTower = new SlowTower(gridX, gridY);
+            } else {
+                return;
+            }
+            
+            towers.push(newTower);
+            gameState.gold -= cost;
+            
+            gameMessage.textContent = `${newTower.type === TOWER_TYPES.BASIC ? '攻擊塔' : '減速塔'} 已放置！繼續點擊放置，或點擊按鈕取消。`;
+            canvas.style.cursor = 'crosshair';
+            updateUI();
+
         } else {
-            return; // 錯誤的塔類型
+            // --- 選中塔邏輯 (用於升級) ---
+            window.hideUpgradePanel(); // 先隱藏任何舊面板
+
+            let clickedTower = null;
+            const clickRadiusSq = (GRID_SIZE / 2) * (GRID_SIZE / 2); // 點擊半徑平方
+            
+            for (const tower of towers) {
+                const towerPixelCoords = getPixelCoords(tower.gridX + 0.5, tower.gridY + 0.5);
+                const dx = x - towerPixelCoords.x;
+                const dy = y - towerPixelCoords.y;
+                const distanceSq = dx * dx + dy * dy;
+                
+                if (distanceSq <= clickRadiusSq) {
+                    clickedTower = tower;
+                    break;
+                }
+            }
+
+            if (clickedTower) {
+                showUpgradePanel(clickedTower);
+            } else {
+                gameMessage.textContent = '點擊一個塔防來查看資訊或升級。';
+            }
         }
-        
-        towers.push(newTower);
-        gameState.gold -= cost;
-        
-        // 提示文字調整: 清楚說明放置後可繼續放置或取消
-        gameMessage.textContent = `${newTower.type === TOWER_TYPES.BASIC ? '攻擊塔' : '減速塔'} 已放置！繼續點擊地圖空地放置，或點擊購買按鈕取消。`;
-        canvas.style.cursor = 'crosshair';
-        updateUI();
     });
 
     // 畫布滑鼠移動事件 (用於預覽放置位置)
@@ -900,7 +1177,7 @@
         updateUI();
     };
 
-    // 覆寫 gameLoop 來處理預覽繪製 (更新以處理兩種塔)
+    // 覆寫 gameLoop 來處理預覽繪製
     const originalGameLoop = gameLoop;
     window.previewTower = null;
 
@@ -924,7 +1201,7 @@
             ctx.arc(x, y, range, 0, Math.PI * 2);
             ctx.stroke();
 
-            // 繪製塔形狀
+            // 繪製塔形狀 (使用 BaseTower 的繪圖方式)
             ctx.fillStyle = isValid ? color : 'rgba(255, 0, 0, 0.4)';
             ctx.beginPath();
             ctx.arc(x, y, 18, 0, Math.PI * 2);
